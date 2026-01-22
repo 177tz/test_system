@@ -372,52 +372,54 @@
         }
 
         // ================= API 呼叫 (含重試機制) =================
-        async function callApi(action, payload, isRetry = false) {
-            if (!STATE.isOnline) {
-                throw new Error('NETWORK_OFFLINE');
-            }
-
-            // 儲存動作以便重試
-            if (!isRetry) {
-                STATE.lastAction = { action, payload };
-                STATE.retryCount = 0;
-            }
-
+        async function callApi(action, payload) {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), CONFIG.API_TIMEOUT);
-
-            log(`呼叫 API: ${action}`, 'info');
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超時
 
             try {
+                // 🔥 關鍵修改：改用 URLSearchParams 包裝資料
+                // 這會將資料轉為 key=value 的格式 (application/x-www-form-urlencoded)
+                const formData = new URLSearchParams();
+                formData.append('data', JSON.stringify({ action, payload }));
+
+                console.log(`📡 發送請求 [${action}]...`);
+
                 const response = await fetch(CONFIG.GAS_API_URL, {
                     method: 'POST',
-                    // 移除 headers，讓瀏覽器預設使用 text/plain，這就不會觸發 OPTIONS 預檢
-                    body: JSON.stringify({ action, payload }),
+                    // 不需要設定 Content-Type header，瀏覽器會自動處理
+                    body: formData, 
                     signal: controller.signal
                 });
 
                 clearTimeout(timeoutId);
 
                 if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
+                    throw new Error(`HTTP 錯誤: ${response.status}`);
                 }
 
-                const data = await response.json();
-                log('API 回應: ' + JSON.stringify(data), 'success');
-                
-                STATE.retryCount = 0; // 成功後重置計數
-                return data;
+                const result = await response.json();
+                console.log("📥 收到回應:", result);
+
+                if (result.status === 'error') {
+                    throw new Error(result.message || '伺服器回傳錯誤');
+                }
+
+                return result;
 
             } catch (error) {
                 clearTimeout(timeoutId);
-                log('API 錯誤: ' + error.message, 'error');
-
+                console.error("❌ API 呼叫失敗:", error);
+                
+                // 錯誤轉拋，交給外層處理
                 if (error.name === 'AbortError') {
                     throw new Error('API_TIMEOUT');
                 }
-
+                if (!navigator.onLine) {
+                    throw new Error('NETWORK_OFFLINE');
+                }
                 throw error;
             }
+        }
         }
 
         // ================= 重試機制 =================
